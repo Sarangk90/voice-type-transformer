@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import * as Haptics from "expo-haptics";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   useSharedValue,
@@ -52,14 +52,16 @@ export default function RecordScreen() {
 
   const bgOpacity = useSharedValue(0);
 
-  useEffect(() => {
-    checkApiKey();
-  }, []);
-
-  const checkApiKey = async () => {
+  const checkApiKey = useCallback(async () => {
     const result = await getActiveApiKey();
     setHasApiKey(!!result);
-  };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      checkApiKey();
+    }, [checkApiKey])
+  );
 
   useEffect(() => {
     bgOpacity.value = withTiming(isRecording ? 1 : 0, { duration: 400 });
@@ -95,9 +97,33 @@ export default function RecordScreen() {
         playsInSilentModeIOS: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      const recordingOptions = Platform.OS === "web"
+        ? {
+            isMeteringEnabled: true,
+            android: {
+              extension: ".m4a",
+              outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+              audioEncoder: Audio.AndroidAudioEncoder.AAC,
+              sampleRate: 44100,
+              numberOfChannels: 1,
+              bitRate: 128000,
+            },
+            ios: {
+              extension: ".m4a",
+              audioQuality: Audio.IOSAudioQuality.HIGH,
+              outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
+              sampleRate: 44100,
+              numberOfChannels: 1,
+              bitRate: 128000,
+            },
+            web: {
+              mimeType: "audio/webm;codecs=opus",
+              bitsPerSecond: 128000,
+            },
+          }
+        : Audio.RecordingOptionsPresets.HIGH_QUALITY;
+
+      const { recording } = await Audio.Recording.createAsync(recordingOptions);
 
       recordingRef.current = recording;
       startTimeRef.current = Date.now();
