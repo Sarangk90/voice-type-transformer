@@ -2,6 +2,20 @@ import { Platform } from "react-native";
 import { Provider } from "./api-keys";
 import { getApiUrl } from "./query-client";
 
+const TRANSCRIBE_TIMEOUT_MS = 60000;
+const POLISH_TIMEOUT_MS = 30000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms / 1000} seconds. Check your internet connection and try again.`));
+    }, ms);
+    promise
+      .then((val) => { clearTimeout(timer); resolve(val); })
+      .catch((err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
 async function blobToBase64(blobUrl: string): Promise<{ base64: string; mimeType: string }> {
   const response = await fetch(blobUrl);
   const blob = await response.blob();
@@ -12,9 +26,13 @@ async function blobToBase64(blobUrl: string): Promise<{ base64: string; mimeType
     reader.onload = () => {
       const dataUrl = reader.result as string;
       const base64 = dataUrl.split(",")[1];
+      if (!base64) {
+        reject(new Error("Failed to convert audio recording. Please try again."));
+        return;
+      }
       resolve({ base64, mimeType });
     };
-    reader.onerror = reject;
+    reader.onerror = () => reject(new Error("Failed to read audio recording. Please try again."));
     reader.readAsDataURL(blob);
   });
 }
@@ -25,9 +43,17 @@ export async function transcribeAudio(
   provider: Provider
 ): Promise<string> {
   if (Platform.OS === "web") {
-    return transcribeViaProxy(audioUri, apiKey, provider);
+    return withTimeout(
+      transcribeViaProxy(audioUri, apiKey, provider),
+      TRANSCRIBE_TIMEOUT_MS,
+      "Transcription"
+    );
   }
-  return transcribeDirect(audioUri, apiKey, provider);
+  return withTimeout(
+    transcribeDirect(audioUri, apiKey, provider),
+    TRANSCRIBE_TIMEOUT_MS,
+    "Transcription"
+  );
 }
 
 async function transcribeViaProxy(
@@ -46,11 +72,15 @@ async function transcribeViaProxy(
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({ error: "Unknown error" }));
-    throw new Error(parseErrorMessage(response.status, data.error));
+    throw new Error(parseErrorMessage(response.status, data.error || JSON.stringify(data)));
   }
 
   const data = await response.json();
-  return data.text;
+  const text = data.text?.trim();
+  if (!text) {
+    throw new Error("No speech detected. Please speak clearly and try again.");
+  }
+  return text;
 }
 
 async function transcribeDirect(
@@ -79,7 +109,7 @@ async function transcribeDirect(
     ? "https://api.groq.com/openai/v1"
     : "https://api.openai.com/v1";
 
-  const response = await globalThis.fetch(`${baseUrl}/audio/transcriptions`, {
+  const response = await fetch(`${baseUrl}/audio/transcriptions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: formData,
@@ -91,7 +121,11 @@ async function transcribeDirect(
   }
 
   const text = await response.text();
-  return text.trim();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error("No speech detected. Please speak clearly and try again.");
+  }
+  return trimmed;
 }
 
 export async function polishTranscript(
@@ -100,9 +134,17 @@ export async function polishTranscript(
   provider: Provider
 ): Promise<string> {
   if (Platform.OS === "web") {
-    return polishViaProxy(rawText, apiKey, provider);
+    return withTimeout(
+      polishViaProxy(rawText, apiKey, provider),
+      POLISH_TIMEOUT_MS,
+      "Text polishing"
+    );
   }
-  return polishDirect(rawText, apiKey, provider);
+  return withTimeout(
+    polishDirect(rawText, apiKey, provider),
+    POLISH_TIMEOUT_MS,
+    "Text polishing"
+  );
 }
 
 async function polishViaProxy(
@@ -110,24 +152,20 @@ async function polishViaProxy(
   apiKey: string,
   provider: Provider
 ): Promise<string> {
-  try {
-    const apiUrl = getApiUrl();
-    const response = await fetch(new URL("/api/polish", apiUrl).toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey, provider, text: rawText }),
-    });
+  const apiUrl = getApiUrl();
+  const response = await fetch(new URL("/api/polish", apiUrl).toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ apiKey, provider, text: rawText }),
+  });
 
-    if (!response.ok) {
-      console.warn("Polish proxy failed, returning raw text");
-      return rawText;
-    }
-
-    const data = await response.json();
-    return data.text || rawText;
-  } catch {
+  if (!response.ok) {
+    console.warn("Polish proxy failed, returning raw text");
     return rawText;
   }
+
+  const data = await response.json();
+  return data.text || rawText;
 }
 
 async function polishDirect(
@@ -140,38 +178,34 @@ async function polishDirect(
     : "https://api.openai.com/v1";
   const model = provider === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
 
-  try {
-    const response = await globalThis.fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a text editor. Fix any transcription errors, add proper punctuation, capitalize sentences, and format the text naturally. Do NOT change the meaning or add new content. Return ONLY the corrected text with no explanation.",
-          },
-          { role: "user", content: rawText },
-        ],
-        temperature: 0.1,
-        max_tokens: 2048,
-      }),
-    });
+  const response = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a text editor. Fix any transcription errors, add proper punctuation, capitalize sentences, and format the text naturally. Do NOT change the meaning or add new content. Return ONLY the corrected text with no explanation.",
+        },
+        { role: "user", content: rawText },
+      ],
+      temperature: 0.1,
+      max_tokens: 2048,
+    }),
+  });
 
-    if (!response.ok) {
-      console.warn("LLM polish failed, returning raw text");
-      return rawText;
-    }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || rawText;
-  } catch {
+  if (!response.ok) {
+    console.warn("LLM polish failed, returning raw text");
     return rawText;
   }
+
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content?.trim() || rawText;
 }
 
 function parseErrorMessage(status: number, errorText: string): string {
@@ -183,6 +217,12 @@ function parseErrorMessage(status: number, errorText: string): string {
   }
   if (status === 413) {
     return "Recording is too long. Try a shorter recording.";
+  }
+  if (status === 400) {
+    if (errorText.toLowerCase().includes("audio")) {
+      return "Audio format not supported. Please try recording again.";
+    }
+    return `Request error: ${errorText}`;
   }
   return `Transcription failed (${status}): ${errorText}`;
 }

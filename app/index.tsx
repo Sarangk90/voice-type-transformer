@@ -45,6 +45,7 @@ export default function RecordScreen() {
   const [autoCopied, setAutoCopied] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const recordingRef = useRef<Audio.Recording | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -133,6 +134,7 @@ export default function RecordScreen() {
       setCopied(false);
       setAutoCopied(false);
       setRecordingDuration(0);
+      setErrorMessage("");
 
       if (Platform.OS !== "web") {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -218,8 +220,12 @@ export default function RecordScreen() {
     } catch (err: any) {
       setIsProcessing(false);
       setProcessingStep("");
-      console.error("Processing error:", err);
-      Alert.alert("Error", err.message || "Something went wrong.");
+      const msg = err.message || "Something went wrong. Please try again.";
+      console.error("Processing error:", msg);
+      setErrorMessage(msg);
+      if (Platform.OS !== "web") {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      }
     }
   };
 
@@ -247,6 +253,7 @@ export default function RecordScreen() {
     setPolishedText("");
     setCopied(false);
     setAutoCopied(false);
+    setErrorMessage("");
   };
 
   const formatTimer = (seconds: number) => {
@@ -258,7 +265,7 @@ export default function RecordScreen() {
   const webTopInset = Platform.OS === "web" ? 67 : 0;
   const webBottomInset = Platform.OS === "web" ? 34 : 0;
 
-  const showTranscript = !!(rawText || polishedText || isProcessing);
+  const showTranscript = !!(rawText || polishedText || isProcessing || errorMessage);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + webTopInset }]}>
@@ -325,7 +332,7 @@ export default function RecordScreen() {
           </View>
         )}
 
-        {showTranscript && (
+        {showTranscript && !errorMessage && (
           <TranscriptCard
             rawText={rawText}
             polishedText={polishedText}
@@ -335,6 +342,23 @@ export default function RecordScreen() {
             onClear={handleClear}
             copied={copied}
           />
+        )}
+
+        {!!errorMessage && (
+          <Animated.View entering={FadeIn.duration(300)} style={styles.errorContainer}>
+            <View style={styles.errorIconRow}>
+              <Ionicons name="alert-circle" size={28} color={Colors.accentRed} />
+            </View>
+            <Text style={styles.errorTitle}>Something went wrong</Text>
+            <Text style={styles.errorText}>{errorMessage}</Text>
+            <Pressable
+              onPress={handleClear}
+              style={({ pressed }) => [styles.errorRetryButton, { opacity: pressed ? 0.7 : 1 }]}
+            >
+              <Ionicons name="refresh" size={18} color="#fff" />
+              <Text style={styles.errorRetryText}>Try Again</Text>
+            </Pressable>
+          </Animated.View>
         )}
       </View>
 
@@ -583,5 +607,46 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: "Inter_500Medium",
     color: Colors.text,
+  },
+  errorContainer: {
+    alignItems: "center",
+    paddingHorizontal: 32,
+    gap: 10,
+  },
+  errorIconRow: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "rgba(255, 59, 48, 0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 4,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontFamily: "Inter_600SemiBold",
+    color: Colors.text,
+  },
+  errorText: {
+    fontSize: 14,
+    fontFamily: "Inter_400Regular",
+    color: Colors.textSecondary,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  errorRetryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginTop: 8,
+  },
+  errorRetryText: {
+    fontSize: 14,
+    fontFamily: "Inter_600SemiBold",
+    color: "#fff",
   },
 });

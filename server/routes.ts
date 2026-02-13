@@ -6,8 +6,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const { apiKey, provider, audioBase64, mimeType } = req.body;
 
+      console.log(`[transcribe] provider=${provider}, mimeType=${mimeType}, audioSize=${audioBase64?.length || 0} chars`);
+
       if (!apiKey || !provider || !audioBase64) {
-        return res.status(400).json({ error: "Missing required fields" });
+        console.log("[transcribe] Missing required fields");
+        return res.status(400).json({ error: "Missing required fields: apiKey, provider, and audio data are all required." });
+      }
+
+      if (audioBase64.length < 100) {
+        console.log("[transcribe] Audio data too small, likely empty recording");
+        return res.status(400).json({ error: "Recording was too short or empty. Please try again." });
       }
 
       const audioBuffer = Buffer.from(audioBase64, "base64");
@@ -53,13 +61,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (!response.ok) {
         const errText = await response.text();
+        console.error(`[transcribe] API error ${response.status}: ${errText.substring(0, 500)}`);
         return res.status(response.status).json({ error: errText });
       }
 
       const text = await response.text();
+      console.log(`[transcribe] Success, got ${text.length} chars`);
       res.json({ text: text.trim() });
     } catch (err: any) {
-      console.error("Transcription proxy error:", err);
+      console.error("[transcribe] Proxy error:", err.message || err);
       res.status(500).json({ error: err.message || "Internal server error" });
     }
   });
