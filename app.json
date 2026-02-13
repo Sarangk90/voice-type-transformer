@@ -1,12 +1,12 @@
 {
   "expo": {
-    "name": "My App",
-    "slug": "my-app",
+    "name": "VoiceType",
+    "slug": "voicetype",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
-    "userInterfaceStyle": "automatic",
+    "scheme": "voicetype",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/splash-icon.png",
