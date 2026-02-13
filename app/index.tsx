@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   Pressable,
   Platform,
   Alert,
+  Dimensions,
 } from "react-native";
 import { Audio } from "expo-av";
 import * as Haptics from "expo-haptics";
@@ -18,9 +19,9 @@ import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
-  withSpring,
   FadeIn,
   FadeOut,
+  SlideInDown,
 } from "react-native-reanimated";
 
 import Colors from "@/constants/colors";
@@ -31,6 +32,8 @@ import { getActiveApiKey } from "@/lib/api-keys";
 import { transcribeAudio, polishTranscript } from "@/lib/transcription";
 import { saveToHistory } from "@/lib/history";
 
+const SCREEN_WIDTH = Dimensions.get("window").width;
+
 export default function RecordScreen() {
   const insets = useSafeAreaInsets();
   const [isRecording, setIsRecording] = useState(false);
@@ -39,6 +42,7 @@ export default function RecordScreen() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStep, setProcessingStep] = useState("");
   const [copied, setCopied] = useState(false);
+  const [autoCopied, setAutoCopied] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
 
@@ -73,10 +77,7 @@ export default function RecordScreen() {
         "Please add your OpenAI or Groq API key in Settings to start transcribing.",
         [
           { text: "Cancel", style: "cancel" as const },
-          {
-            text: "Open Settings",
-            onPress: () => router.push("/settings"),
-          },
+          { text: "Open Settings", onPress: () => router.push("/settings") },
         ]
       );
       return;
@@ -85,10 +86,7 @@ export default function RecordScreen() {
     try {
       const permission = await Audio.requestPermissionsAsync();
       if (!permission.granted) {
-        Alert.alert(
-          "Microphone Access",
-          "Microphone permission is needed to record audio."
-        );
+        Alert.alert("Microphone Access", "Microphone permission is needed to record audio.");
         return;
       }
 
@@ -107,6 +105,7 @@ export default function RecordScreen() {
       setRawText("");
       setPolishedText("");
       setCopied(false);
+      setAutoCopied(false);
       setRecordingDuration(0);
 
       if (Platform.OS !== "web") {
@@ -114,9 +113,7 @@ export default function RecordScreen() {
       }
 
       timerRef.current = setInterval(() => {
-        setRecordingDuration(
-          Math.floor((Date.now() - startTimeRef.current) / 1000)
-        );
+        setRecordingDuration(Math.floor((Date.now() - startTimeRef.current) / 1000));
       }, 1000);
     } catch (err) {
       console.error("Failed to start recording:", err);
@@ -172,9 +169,17 @@ export default function RecordScreen() {
       setIsProcessing(false);
       setProcessingStep("");
 
+      await Clipboard.setStringAsync(polished);
+      setAutoCopied(true);
+      setCopied(true);
+
       if (Platform.OS !== "web") {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
+
+      setTimeout(() => {
+        setCopied(false);
+      }, 3000);
 
       await saveToHistory({
         id: Crypto.randomUUID(),
@@ -215,6 +220,7 @@ export default function RecordScreen() {
     setRawText("");
     setPolishedText("");
     setCopied(false);
+    setAutoCopied(false);
   };
 
   const formatTimer = (seconds: number) => {
@@ -226,6 +232,8 @@ export default function RecordScreen() {
   const webTopInset = Platform.OS === "web" ? 67 : 0;
   const webBottomInset = Platform.OS === "web" ? 34 : 0;
 
+  const showTranscript = !!(rawText || polishedText || isProcessing);
+
   return (
     <View style={[styles.container, { paddingTop: insets.top + webTopInset }]}>
       <Animated.View
@@ -236,107 +244,137 @@ export default function RecordScreen() {
       <View style={styles.header}>
         <Pressable
           onPress={() => router.push("/history")}
-          style={({ pressed }) => [
-            styles.headerButton,
-            { opacity: pressed ? 0.6 : 1 },
-          ]}
+          style={({ pressed }) => [styles.headerButton, { opacity: pressed ? 0.6 : 1 }]}
         >
           <Ionicons name="time-outline" size={24} color={Colors.text} />
         </Pressable>
 
         <View style={styles.headerCenter}>
-          {isRecording && (
+          {isRecording ? (
             <Animated.View
               entering={FadeIn.duration(300)}
               exiting={FadeOut.duration(300)}
               style={styles.timerContainer}
             >
               <View style={styles.liveDot} />
-              <Text style={styles.timerText}>
-                {formatTimer(recordingDuration)}
-              </Text>
+              <Text style={styles.timerText}>{formatTimer(recordingDuration)}</Text>
+            </Animated.View>
+          ) : (
+            <Animated.View entering={FadeIn.duration(300)} exiting={FadeOut.duration(300)}>
+              {autoCopied && !isProcessing && (
+                <View style={styles.autoCopiedBadge}>
+                  <Ionicons name="checkmark-circle" size={16} color={Colors.accent} />
+                  <Text style={styles.autoCopiedText}>Copied to clipboard</Text>
+                </View>
+              )}
             </Animated.View>
           )}
         </View>
 
         <Pressable
           onPress={() => router.push("/settings")}
-          style={({ pressed }) => [
-            styles.headerButton,
-            { opacity: pressed ? 0.6 : 1 },
-          ]}
+          style={({ pressed }) => [styles.headerButton, { opacity: pressed ? 0.6 : 1 }]}
         >
           <Ionicons name="settings-outline" size={24} color={Colors.text} />
         </Pressable>
       </View>
 
       <View style={styles.body}>
-        {!isRecording && !rawText && !isProcessing && (
-          <Animated.View
-            entering={FadeIn.duration(500)}
-            style={styles.emptyState}
-          >
+        {!isRecording && !showTranscript && (
+          <Animated.View entering={FadeIn.duration(500)} style={styles.emptyState}>
             <View style={styles.emptyIconContainer}>
               <Ionicons name="mic" size={40} color={Colors.primary} />
             </View>
             <Text style={styles.emptyTitle}>Tap to Record</Text>
             <Text style={styles.emptySubtitle}>
-              Your voice will be transcribed{"\n"}and polished automatically
+              Speak and your text is automatically{"\n"}copied to your clipboard
             </Text>
           </Animated.View>
         )}
 
-        {(isRecording || isProcessing) && (
+        {(isRecording || isProcessing) && !polishedText && (
           <View style={styles.waveformArea}>
             <WaveformVisualizer isRecording={isRecording} barCount={35} />
-            {isRecording && (
-              <Text style={styles.recordingLabel}>Listening...</Text>
-            )}
+            {isRecording && <Text style={styles.recordingLabel}>Listening...</Text>}
           </View>
         )}
 
-        <TranscriptCard
-          rawText={rawText}
-          polishedText={polishedText}
-          isProcessing={isProcessing}
-          processingStep={processingStep}
-          onCopy={handleCopy}
-          onClear={handleClear}
-          copied={copied}
-        />
+        {showTranscript && (
+          <TranscriptCard
+            rawText={rawText}
+            polishedText={polishedText}
+            isProcessing={isProcessing}
+            processingStep={processingStep}
+            onCopy={handleCopy}
+            onClear={handleClear}
+            copied={copied}
+          />
+        )}
       </View>
 
-      <View
-        style={[
-          styles.controls,
-          { paddingBottom: insets.bottom + webBottomInset + 20 },
-        ]}
+      <Animated.View
+        entering={SlideInDown.duration(400).springify()}
+        style={[styles.keyboardPanel, { paddingBottom: insets.bottom + webBottomInset + 8 }]}
       >
-        <RecordButton
-          isRecording={isRecording}
-          onPress={handleRecord}
-          disabled={isProcessing}
-        />
-      </View>
+        <View style={styles.keyboardHandle} />
 
-      {hasApiKey === false && !isRecording && !rawText && (
+        <View style={styles.keyboardContent}>
+          <View style={styles.keyboardSide}>
+            {showTranscript && !isRecording && !isProcessing && (
+              <Pressable
+                onPress={handleClear}
+                style={({ pressed }) => [styles.keyboardAction, { opacity: pressed ? 0.6 : 1 }]}
+              >
+                <Ionicons name="refresh" size={22} color={Colors.textSecondary} />
+                <Text style={styles.keyboardActionLabel}>New</Text>
+              </Pressable>
+            )}
+          </View>
+
+          <RecordButton isRecording={isRecording} onPress={handleRecord} disabled={isProcessing} />
+
+          <View style={styles.keyboardSide}>
+            {showTranscript && !isRecording && !isProcessing && (
+              <Pressable
+                onPress={handleCopy}
+                style={({ pressed }) => [styles.keyboardAction, { opacity: pressed ? 0.6 : 1 }]}
+              >
+                <Ionicons
+                  name={copied ? "checkmark-circle" : "clipboard-outline"}
+                  size={22}
+                  color={copied ? Colors.accent : Colors.primary}
+                />
+                <Text
+                  style={[
+                    styles.keyboardActionLabel,
+                    { color: copied ? Colors.accent : Colors.primary },
+                  ]}
+                >
+                  {copied ? "Done" : "Copy"}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        </View>
+
+        <Text style={styles.keyboardHint}>
+          {isRecording
+            ? "Tap to stop recording"
+            : isProcessing
+            ? "Processing your voice..."
+            : "Text is auto-copied when ready"}
+        </Text>
+      </Animated.View>
+
+      {hasApiKey === false && !isRecording && !showTranscript && (
         <Animated.View entering={FadeIn.delay(500)} style={styles.setupBanner}>
           <Pressable
             onPress={() => router.push("/settings")}
-            style={({ pressed }) => [
-              styles.setupContent,
-              { opacity: pressed ? 0.9 : 1 },
-            ]}
+            style={({ pressed }) => [styles.setupContent, { opacity: pressed ? 0.9 : 1 }]}
           >
             <Ionicons name="key-outline" size={18} color={Colors.primary} />
-            <Text style={styles.setupText}>
-              Add your API key to get started
-            </Text>
-            <Ionicons
-              name="chevron-forward"
-              size={16}
-              color={Colors.textSecondary}
-            />
+            <Text style={styles.setupText}>Add your API key to get started</Text>
+            <Ionicons name="chevron-forward" size={16} color={Colors.textSecondary} />
           </Pressable>
         </Animated.View>
       )}
@@ -392,6 +430,20 @@ const styles = StyleSheet.create({
     color: Colors.accentRed,
     fontVariant: ["tabular-nums"],
   },
+  autoCopiedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(52, 199, 89, 0.1)",
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  autoCopiedText: {
+    fontSize: 13,
+    fontFamily: "Inter_500Medium",
+    color: Colors.accent,
+  },
   body: {
     flex: 1,
     justifyContent: "center",
@@ -433,13 +485,56 @@ const styles = StyleSheet.create({
     fontFamily: "Inter_500Medium",
     color: Colors.accent,
   },
-  controls: {
+  keyboardPanel: {
+    backgroundColor: Colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  keyboardHandle: {
+    width: 36,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: Colors.textTertiary,
+    alignSelf: "center",
+    marginBottom: 12,
+  },
+  keyboardContent: {
+    flexDirection: "row",
     alignItems: "center",
-    paddingTop: 16,
+    justifyContent: "space-around",
+    paddingHorizontal: 24,
+  },
+  keyboardSide: {
+    width: 60,
+    alignItems: "center",
+  },
+  keyboardAction: {
+    alignItems: "center",
+    gap: 4,
+    padding: 8,
+  },
+  keyboardActionLabel: {
+    fontSize: 11,
+    fontFamily: "Inter_500Medium",
+    color: Colors.textSecondary,
+  },
+  keyboardHint: {
+    fontSize: 12,
+    fontFamily: "Inter_400Regular",
+    color: Colors.textTertiary,
+    textAlign: "center",
+    marginTop: 10,
+    marginBottom: 4,
   },
   setupBanner: {
     position: "absolute",
-    bottom: 120,
+    bottom: 220,
     left: 20,
     right: 20,
   },
