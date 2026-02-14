@@ -170,8 +170,15 @@ function configureExpoAndLanding(app: express.Application) {
   );
   const landingPageTemplate = fs.readFileSync(templatePath, "utf-8");
   const appName = getAppName();
+  const distPath = path.resolve(process.cwd(), "dist");
+  const webIndexPath = path.join(distPath, "index.html");
+  const hasWebBuild = fs.existsSync(webIndexPath);
+  const webIndexHtml = hasWebBuild ? fs.readFileSync(webIndexPath, "utf-8") : "";
 
   log("Serving static Expo files with dynamic manifest routing");
+  if (hasWebBuild) {
+    log("Web build found in dist/ — serving web app for browser requests");
+  }
 
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.path.startsWith("/api")) {
@@ -188,6 +195,10 @@ function configureExpoAndLanding(app: express.Application) {
     }
 
     if (req.path === "/") {
+      if (hasWebBuild) {
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        return res.status(200).send(webIndexHtml);
+      }
       return serveLandingPage({
         req,
         res,
@@ -199,6 +210,9 @@ function configureExpoAndLanding(app: express.Application) {
     next();
   });
 
+  if (hasWebBuild) {
+    app.use(express.static(distPath));
+  }
   app.use("/assets", express.static(path.resolve(process.cwd(), "assets")));
   app.use(express.static(path.resolve(process.cwd(), "static-build")));
 
