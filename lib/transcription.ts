@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { fetch as expoFetch } from "expo/fetch";
+import { File } from "expo-file-system";
 import { Provider } from "./api-keys";
 
 const TRANSCRIBE_TIMEOUT_MS = 60000;
@@ -24,20 +25,6 @@ function getChatModel(provider: Provider): string {
   return provider === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
 }
 
-function base64ToUint8Array(base64: string): Uint8Array {
-  let padded = base64;
-  const remainder = padded.length % 4;
-  if (remainder === 2) padded += "==";
-  else if (remainder === 3) padded += "=";
-
-  const binaryString = atob(padded);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
-
 export async function transcribeAudio(
   audioUri: string,
   apiKey: string,
@@ -54,86 +41,23 @@ async function transcribeNative(
   apiKey: string,
   provider: Provider
 ): Promise<string> {
-  let base64: string;
-  try {
-    const LegacyFS = require("expo-file-system/legacy");
-    base64 = await LegacyFS.readAsStringAsync(audioUri, {
-      encoding: LegacyFS.EncodingType.Base64,
-    });
-  } catch (fsErr: any) {
-    throw new Error(`Could not read audio file: ${fsErr.message}`);
-  }
-
-  if (!base64 || base64.length < 100) {
-    throw new Error("Recording was too short or empty. Please try again.");
-  }
-
-  const fileExtension = audioUri.split(".").pop()?.split("?")[0] || "m4a";
-  const mimeType = fileExtension === "webm" ? "audio/webm"
-    : fileExtension === "mp4" ? "audio/mp4"
-    : fileExtension === "caf" ? "audio/x-caf"
-    : "audio/m4a";
-
-  const audioBytes = base64ToUint8Array(base64);
-
-  const boundary = "----ExpoFormBoundary" + Date.now().toString(36);
-  const model = getWhisperModel(provider);
-
-  const parts: (string | Uint8Array)[] = [];
-
-  parts.push(
-    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="recording.${fileExtension}"\r\nContent-Type: ${mimeType}\r\n\r\n`
-  );
-  parts.push(audioBytes);
-  parts.push("\r\n");
-
-  parts.push(
-    `--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n${model}\r\n`
-  );
-
-  parts.push(
-    `--${boundary}\r\nContent-Disposition: form-data; name="response_format"\r\n\r\ntext\r\n`
-  );
-
-  parts.push(`--${boundary}--\r\n`);
-
-  const encoder = new TextEncoder();
-  let totalLength = 0;
-  const buffers: Uint8Array[] = [];
-  for (const part of parts) {
-    if (typeof part === "string") {
-      const encoded = encoder.encode(part);
-      buffers.push(encoded);
-      totalLength += encoded.length;
-    } else {
-      buffers.push(part);
-      totalLength += part.length;
-    }
-  }
-
-  const body = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const buf of buffers) {
-    body.set(buf, offset);
-    offset += buf.length;
-  }
-
   const apiBase = getApiEndpoint(provider);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), TRANSCRIBE_TIMEOUT_MS);
+  const url = `${apiBase}/audio/transcriptions`;
+
+  const file = new File(audioUri);
+  const formData = new FormData();
+  formData.append("file", file as any);
+  formData.append("model", getWhisperModel(provider));
+  formData.append("response_format", "text");
 
   try {
-    const response = await expoFetch(`${apiBase}/audio/transcriptions`, {
+    const response = await expoFetch(url, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
       },
-      body: body,
-      signal: controller.signal,
+      body: formData as any,
     });
-
-    clearTimeout(timeout);
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "");
@@ -153,11 +77,10 @@ async function transcribeNative(
     }
     return text;
   } catch (err: any) {
-    clearTimeout(timeout);
-    if (err.name === "AbortError") {
-      throw new Error("Transcription timed out. Check your internet connection and try again.");
+    if (err.message && (err.message.includes("API error") || err.message.includes("Invalid API key"))) {
+      throw err;
     }
-    throw err;
+    throw new Error(`Network error: ${err.message || "Load Failed"}. Check your internet connection and try again.`);
   }
 }
 
