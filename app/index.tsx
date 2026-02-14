@@ -24,7 +24,6 @@ import Animated, {
   SlideInDown,
 } from "react-native-reanimated";
 
-import * as LegacyFileSystem from "expo-file-system/legacy";
 import Colors from "@/constants/colors";
 import RecordButton from "@/components/RecordButton";
 import WaveformVisualizer from "@/components/WaveformVisualizer";
@@ -32,7 +31,6 @@ import TranscriptCard from "@/components/TranscriptCard";
 import { getActiveApiKey } from "@/lib/api-keys";
 import { transcribeAudio, polishTranscript } from "@/lib/transcription";
 import { saveToHistory } from "@/lib/history";
-import { ScrollView } from "react-native";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
@@ -48,7 +46,6 @@ export default function RecordScreen() {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
-  const [debugLog, setDebugLog] = useState<string[]>([]);
 
   const recordingRef = useRef<Audio.Recording | null>(null);
   const startTimeRef = useRef<number>(0);
@@ -270,118 +267,6 @@ export default function RecordScreen() {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const runDiagnostic = async () => {
-    const log: string[] = [];
-    const addLog = (msg: string) => {
-      log.push(msg);
-      setDebugLog([...log]);
-    };
-
-    addLog("=== DIAGNOSTIC START ===");
-    addLog(`Platform: ${Platform.OS}`);
-
-    // Step 1: Check env var
-    try {
-      const domain = process.env.EXPO_PUBLIC_DOMAIN;
-      addLog(`[1] EXPO_PUBLIC_DOMAIN = "${domain}"`);
-    } catch (e: any) {
-      addLog(`[1] FAIL env: ${e.message}`);
-    }
-
-    // Step 2: Test getApiUrl
-    try {
-      const { getApiUrl } = require("@/lib/query-client");
-      const url = getApiUrl();
-      addLog(`[2] getApiUrl() = "${url}"`);
-    } catch (e: any) {
-      addLog(`[2] FAIL getApiUrl: ${e.message}`);
-    }
-
-    // Step 3: Test new URL() constructor
-    try {
-      const testUrl = new URL("/api/test", "https://example.com");
-      addLog(`[3] new URL() basic = "${testUrl.toString()}"`);
-    } catch (e: any) {
-      addLog(`[3] FAIL new URL basic: ${e.message}`);
-    }
-
-    // Step 4: Test new URL() with actual domain
-    try {
-      const domain = process.env.EXPO_PUBLIC_DOMAIN || "";
-      const hostWithoutPort = domain.replace(/:\d+$/, "");
-      addLog(`[4a] hostWithoutPort = "${hostWithoutPort}"`);
-      const u = new URL(`https://${hostWithoutPort}`);
-      addLog(`[4b] new URL(domain) = "${u.href}"`);
-      const full = new URL("/api/transcribe", u.href);
-      addLog(`[4c] full URL = "${full.toString()}"`);
-    } catch (e: any) {
-      addLog(`[4] FAIL URL with domain: ${e.message}`);
-    }
-
-    // Step 5: Test API key retrieval
-    try {
-      const keyData = await getActiveApiKey();
-      addLog(`[5] API key: ${keyData ? `provider=${keyData.provider}, key=${keyData.key.substring(0, 8)}...` : "NONE"}`);
-    } catch (e: any) {
-      addLog(`[5] FAIL getActiveApiKey: ${e.message}`);
-    }
-
-    // Step 6: Record 1 second of audio and test file reading
-    try {
-      addLog("[6] Recording 1s of audio...");
-      const perm = await Audio.requestPermissionsAsync();
-      if (!perm.granted) {
-        addLog("[6] FAIL: no audio permission");
-      } else {
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-        const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-        await new Promise((r) => setTimeout(r, 1500));
-        await recording.stopAndUnloadAsync();
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-        const uri = recording.getURI();
-        addLog(`[6a] URI = "${uri}"`);
-
-        if (uri) {
-          const info = await LegacyFileSystem.getInfoAsync(uri);
-          addLog(`[6b] File exists=${info.exists}, size=${info.exists ? (info as any).size : "N/A"}`);
-
-          const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
-            encoding: LegacyFileSystem.EncodingType.Base64,
-          });
-          addLog(`[6c] Base64 length = ${base64.length}`);
-
-          // Step 7: Test fetch to backend
-          try {
-            const domain = process.env.EXPO_PUBLIC_DOMAIN || "";
-            const hostWithoutPort = domain.replace(/:\d+$/, "");
-            const apiUrl = `https://${hostWithoutPort}`;
-            const fetchUrl = `${apiUrl}/api/transcribe`;
-            addLog(`[7a] Fetching: ${fetchUrl}`);
-
-            const resp = await fetch(fetchUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                apiKey: "sk-diag-test",
-                provider: "openai",
-                audioBase64: base64.substring(0, 200),
-                mimeType: "audio/m4a",
-              }),
-            });
-            const respText = await resp.text();
-            addLog(`[7b] Fetch status=${resp.status}, body=${respText.substring(0, 200)}`);
-          } catch (e: any) {
-            addLog(`[7] FAIL fetch: ${e.message}`);
-          }
-        }
-      }
-    } catch (e: any) {
-      addLog(`[6] FAIL recording: ${e.message}`);
-    }
-
-    addLog("=== DIAGNOSTIC END ===");
-  };
-
   const webTopInset = Platform.OS === "web" ? 67 : 0;
   const webBottomInset = Platform.OS === "web" ? 34 : 0;
 
@@ -432,21 +317,8 @@ export default function RecordScreen() {
         </Pressable>
       </View>
 
-      {debugLog.length > 0 && (
-        <ScrollView style={{ maxHeight: 300, backgroundColor: "#111", margin: 8, borderRadius: 8, padding: 8 }}>
-          {debugLog.map((line, i) => (
-            <Text key={i} style={{ color: line.includes("FAIL") ? "#ff4444" : "#44ff44", fontFamily: Platform.OS === "web" ? "monospace" : "Courier", fontSize: 11, marginBottom: 2 }} selectable>{line}</Text>
-          ))}
-        </ScrollView>
-      )}
-
       <View style={styles.body}>
-        {!isRecording && !showTranscript && debugLog.length === 0 && (
-          <Pressable onPress={runDiagnostic} style={{ position: "absolute", bottom: 10, alignSelf: "center", backgroundColor: "#333", paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, zIndex: 10 }}>
-            <Text style={{ color: "#fff", fontSize: 12, fontFamily: "Inter_500Medium" }}>Run Diagnostic</Text>
-          </Pressable>
-        )}
-        {!isRecording && !showTranscript && debugLog.length === 0 && (
+        {!isRecording && !showTranscript && (
           <Animated.View entering={FadeIn.duration(500)} style={styles.emptyState}>
             <View style={styles.emptyIconContainer}>
               <Ionicons name="mic" size={40} color={Colors.primary} />
