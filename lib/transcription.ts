@@ -7,6 +7,9 @@ const TRANSCRIBE_TIMEOUT_MS = 60000;
 const POLISH_TIMEOUT_MS = 30000;
 
 function getBackendBaseUrl(): string {
+  if (Platform.OS === "web" && typeof window !== "undefined") {
+    return window.location.origin;
+  }
   const domain = process.env.EXPO_PUBLIC_DOMAIN || "";
   return `https://${domain}`;
 }
