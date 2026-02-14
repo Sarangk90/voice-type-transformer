@@ -42,21 +42,31 @@ Preferred communication style: Simple, everyday language.
 
 - Users provide their own API keys (OpenAI or Groq) — stored securely on device
 - Provider selection (OpenAI vs Groq) is persisted locally
-- No server-side API proxying — transcription calls go directly from the client to OpenAI/Groq APIs
 
 ### Audio & Transcription Pipeline
 
+**Native (iOS/Android):**
 1. Record audio using `expo-av`
-2. Send audio file directly to OpenAI Whisper API or Groq's Whisper endpoint from the client
-3. Optionally polish/clean the transcript using an LLM (via `polishTranscript` in `lib/transcription.ts`)
+2. Upload audio file directly to OpenAI Whisper API or Groq's Whisper endpoint using `expo-file-system` `File` class and `expo/fetch`
+3. Polish/clean the transcript by calling the LLM chat completions API directly from the device
+4. Auto-copy result to clipboard and save to local history
+
+**Web:**
+1. Record audio using `expo-av`
+2. Send audio as base64 to the Express backend (`/api/transcribe`) which proxies to OpenAI/Groq (needed for CORS)
+3. Polish via backend (`/api/polish`) which proxies to the LLM API
 4. Auto-copy result to clipboard and save to local history
 
 ### Key Patterns
 
+- **Platform-split networking**: Native calls APIs directly (no CORS on native); web uses backend proxy routes (CORS restriction)
+- **expo/fetch**: Used for all API calls on native to avoid Hermes URL parsing issues with the global `fetch`
+- **expo-file-system File class**: Used on native for uploading audio files via FormData
 - **Platform-aware utilities**: Functions in `lib/api-keys.ts` branch between SecureStore (native) and AsyncStorage (web)
 - **Error handling**: Custom ErrorBoundary component wrapping the app
 - **Haptic feedback**: Used throughout for native interactions (recording, copying, deleting)
 - **Development proxy**: Expo packager proxy configured for Replit's dev domain
+- **Port mapping**: Port 8081 (Expo/Metro) is externally accessible on default HTTPS domain; port 5000 (Express) is only accessible internally — native apps must NOT route through port 5000
 
 ## External Dependencies
 
