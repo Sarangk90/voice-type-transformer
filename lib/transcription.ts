@@ -1,5 +1,6 @@
 import { Platform } from "react-native";
 import { fetch as expoFetch } from "expo/fetch";
+import { File } from "expo-file-system";
 import { Provider } from "./api-keys";
 
 const TRANSCRIBE_TIMEOUT_MS = 60000;
@@ -8,6 +9,20 @@ const POLISH_TIMEOUT_MS = 30000;
 function getBackendBaseUrl(): string {
   const domain = process.env.EXPO_PUBLIC_DOMAIN || "";
   return `https://${domain}`;
+}
+
+function getApiEndpoint(provider: Provider): string {
+  return provider === "groq"
+    ? "https://api.groq.com/openai/v1"
+    : "https://api.openai.com/v1";
+}
+
+function getWhisperModel(provider: Provider): string {
+  return provider === "groq" ? "whisper-large-v3-turbo" : "whisper-1";
+}
+
+function getChatModel(provider: Provider): string {
+  return provider === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
 }
 
 export async function transcribeAudio(
@@ -26,55 +41,41 @@ async function transcribeNative(
   apiKey: string,
   provider: Provider
 ): Promise<string> {
-  let base64: string;
-  try {
-    const LegacyFS = require("expo-file-system/legacy");
-    base64 = await LegacyFS.readAsStringAsync(audioUri, {
-      encoding: LegacyFS.EncodingType.Base64,
-    });
-  } catch (fsErr: any) {
-    throw new Error(`Could not read audio file: ${fsErr.message}`);
-  }
+  const file = new File(audioUri);
+  const formData = new FormData();
+  formData.append("file", file as any);
+  formData.append("model", getWhisperModel(provider));
+  formData.append("response_format", "text");
 
-  if (!base64 || base64.length < 100) {
-    throw new Error("Recording was too short or empty. Please try again.");
-  }
-
-  const fileExtension = audioUri.split(".").pop()?.split("?")[0] || "m4a";
-  const mimeType = fileExtension === "webm" ? "audio/webm"
-    : fileExtension === "mp4" ? "audio/mp4"
-    : fileExtension === "caf" ? "audio/x-caf"
-    : "audio/m4a";
-
-  const baseUrl = getBackendBaseUrl();
-  const fetchUrl = `${baseUrl}/api/transcribe`;
-
+  const apiBase = getApiEndpoint(provider);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TRANSCRIBE_TIMEOUT_MS);
 
   try {
-    const response = await expoFetch(fetchUrl, {
+    const response = await expoFetch(`${apiBase}/audio/transcriptions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        apiKey,
-        provider,
-        audioBase64: base64,
-        mimeType,
-      }),
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: formData as any,
       signal: controller.signal,
     });
 
     clearTimeout(timeout);
 
     if (!response.ok) {
-      const data = await response.json().catch(() => null);
-      const errMsg = data?.error || `Server error (${response.status})`;
+      const errText = await response.text().catch(() => "");
+      let errMsg = `API error (${response.status})`;
+      try {
+        const errJson = JSON.parse(errText);
+        errMsg = errJson?.error?.message || errMsg;
+      } catch {
+        if (errText) errMsg = errText;
+      }
       throw new Error(parseErrorMessage(response.status, errMsg));
     }
 
-    const data = await response.json();
-    const text = data.text?.trim();
+    const text = (await response.text()).trim();
     if (!text) {
       throw new Error("No speech detected. Please speak clearly and try again.");
     }
@@ -151,14 +152,29 @@ async function polishNative(
   provider: Provider
 ): Promise<string> {
   try {
-    const baseUrl = getBackendBaseUrl();
+    const apiBase = getApiEndpoint(provider);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), POLISH_TIMEOUT_MS);
 
-    const response = await expoFetch(`${baseUrl}/api/polish`, {
+    const response = await expoFetch(`${apiBase}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey, provider, text: rawText }),
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: getChatModel(provider),
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a text editor. Fix any transcription errors, add proper punctuation, capitalize sentences, and format the text naturally. Do NOT change the meaning or add new content. Return ONLY the corrected text with no explanation.",
+          },
+          { role: "user", content: rawText },
+        ],
+        temperature: 0.1,
+        max_tokens: 2048,
+      }),
       signal: controller.signal,
     });
 
@@ -169,7 +185,7 @@ async function polishNative(
     }
 
     const data = await response.json();
-    return data.text || rawText;
+    return (data as any).choices?.[0]?.message?.content?.trim() || rawText;
   } catch {
     return rawText;
   }
@@ -193,7 +209,7 @@ async function polishWeb(
     }
 
     const data = await response.json();
-    return data.text || rawText;
+    return (data as any).text || rawText;
   } catch {
     return rawText;
   }
