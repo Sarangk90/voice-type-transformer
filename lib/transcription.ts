@@ -7,8 +7,7 @@ const POLISH_TIMEOUT_MS = 30000;
 
 function getBackendBaseUrl(): string {
   const domain = process.env.EXPO_PUBLIC_DOMAIN || "";
-  const hostWithoutPort = domain.replace(/:\d+$/, "");
-  return `https://${hostWithoutPort}`;
+  return `https://${domain}`;
 }
 
 export async function transcribeAudio(

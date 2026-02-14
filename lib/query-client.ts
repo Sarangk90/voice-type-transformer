@@ -8,8 +8,7 @@ export function getApiUrl(): string {
     throw new Error("EXPO_PUBLIC_DOMAIN is not set");
   }
 
-  const hostWithoutPort = host.replace(/:\d+$/, "");
-  return `https://${hostWithoutPort}`;
+  return `https://${host}`;
 }
 
 function buildUrl(base: string, path: string): string {
