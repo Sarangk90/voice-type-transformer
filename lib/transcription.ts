@@ -1,4 +1,6 @@
 import { Platform } from "react-native";
+import { File } from "expo-file-system";
+import { fetch as expoFetch } from "expo/fetch";
 import { Provider } from "./api-keys";
 import { getApiUrl } from "./query-client";
 
@@ -16,52 +18,59 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-async function audioToBase64(audioUri: string): Promise<{ base64: string; mimeType: string }> {
-  if (Platform.OS === "web") {
-    const response = await fetch(audioUri);
-    const blob = await response.blob();
-    const mimeType = blob.type || "audio/webm";
-
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result as string;
-        const base64 = dataUrl.split(",")[1];
-        if (!base64) {
-          reject(new Error("Failed to convert audio recording. Please try again."));
-          return;
-        }
-        resolve({ base64, mimeType });
-      };
-      reader.onerror = () => reject(new Error("Failed to read audio recording. Please try again."));
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  const LegacyFS = require("expo-file-system/legacy") as typeof import("expo-file-system/legacy");
-  const base64 = await LegacyFS.readAsStringAsync(audioUri, {
-    encoding: LegacyFS.EncodingType.Base64,
-  });
-
-  const ext = audioUri.split(".").pop()?.toLowerCase() || "m4a";
-  const mimeType = ext === "webm" ? "audio/webm"
-    : ext === "mp4" ? "audio/mp4"
-    : ext === "caf" ? "audio/x-caf"
-    : "audio/m4a";
-
-  return { base64, mimeType };
-}
-
 export async function transcribeAudio(
   audioUri: string,
   apiKey: string,
   provider: Provider
 ): Promise<string> {
+  if (Platform.OS === "web") {
+    return withTimeout(
+      transcribeViaProxy(audioUri, apiKey, provider),
+      TRANSCRIBE_TIMEOUT_MS,
+      "Transcription"
+    );
+  }
   return withTimeout(
-    transcribeViaProxy(audioUri, apiKey, provider),
+    transcribeNative(audioUri, apiKey, provider),
     TRANSCRIBE_TIMEOUT_MS,
     "Transcription"
   );
+}
+
+async function transcribeNative(
+  audioUri: string,
+  apiKey: string,
+  provider: Provider
+): Promise<string> {
+  const file = new File(audioUri);
+  const formData = new FormData();
+  formData.append("file", file as any);
+
+  const model = provider === "groq" ? "whisper-large-v3-turbo" : "whisper-1";
+  formData.append("model", model);
+  formData.append("response_format", "text");
+
+  const baseUrl = provider === "groq"
+    ? "https://api.groq.com/openai/v1"
+    : "https://api.openai.com/v1";
+
+  const response = await expoFetch(`${baseUrl}/audio/transcriptions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(parseErrorMessage(response.status, errorText));
+  }
+
+  const text = await response.text();
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error("No speech detected. Please speak clearly and try again.");
+  }
+  return trimmed;
 }
 
 async function transcribeViaProxy(
@@ -69,10 +78,26 @@ async function transcribeViaProxy(
   apiKey: string,
   provider: Provider
 ): Promise<string> {
-  const { base64, mimeType } = await audioToBase64(audioUri);
-  const apiUrl = getApiUrl();
+  const blobResponse = await fetch(audioUri);
+  const blob = await blobResponse.blob();
+  const mimeType = blob.type || "audio/webm";
 
-  console.log(`[transcribe] Sending to proxy: provider=${provider}, mimeType=${mimeType}, base64Length=${base64.length}`);
+  const base64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const b64 = dataUrl.split(",")[1];
+      if (!b64) {
+        reject(new Error("Failed to convert audio recording. Please try again."));
+        return;
+      }
+      resolve(b64);
+    };
+    reader.onerror = () => reject(new Error("Failed to read audio recording. Please try again."));
+    reader.readAsDataURL(blob);
+  });
+
+  const apiUrl = getApiUrl();
 
   const response = await fetch(new URL("/api/transcribe", apiUrl).toString(), {
     method: "POST",
@@ -99,11 +124,61 @@ export async function polishTranscript(
   apiKey: string,
   provider: Provider
 ): Promise<string> {
+  if (Platform.OS === "web") {
+    return withTimeout(
+      polishViaProxy(rawText, apiKey, provider),
+      POLISH_TIMEOUT_MS,
+      "Text polishing"
+    );
+  }
   return withTimeout(
-    polishViaProxy(rawText, apiKey, provider),
+    polishNative(rawText, apiKey, provider),
     POLISH_TIMEOUT_MS,
     "Text polishing"
   );
+}
+
+async function polishNative(
+  rawText: string,
+  apiKey: string,
+  provider: Provider
+): Promise<string> {
+  const baseUrl = provider === "groq"
+    ? "https://api.groq.com/openai/v1"
+    : "https://api.openai.com/v1";
+  const model = provider === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
+
+  try {
+    const response = await expoFetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a text editor. Fix any transcription errors, add proper punctuation, capitalize sentences, and format the text naturally. Do NOT change the meaning or add new content. Return ONLY the corrected text with no explanation.",
+          },
+          { role: "user", content: rawText },
+        ],
+        temperature: 0.1,
+        max_tokens: 2048,
+      }),
+    });
+
+    if (!response.ok) {
+      return rawText;
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || rawText;
+  } catch {
+    return rawText;
+  }
 }
 
 async function polishViaProxy(
@@ -120,14 +195,12 @@ async function polishViaProxy(
     });
 
     if (!response.ok) {
-      console.warn("Polish failed, returning raw text");
       return rawText;
     }
 
     const data = await response.json();
     return data.text || rawText;
-  } catch (err) {
-    console.warn("Polish error, returning raw text:", err);
+  } catch {
     return rawText;
   }
 }
@@ -148,8 +221,5 @@ function parseErrorMessage(status: number, errorText: string): string {
     }
     return errorText;
   }
-  if (status === 500) {
-    return `Server error: ${errorText}`;
-  }
-  return `Transcription failed: ${errorText}`;
+  return `Transcription failed (${status}): ${errorText}`;
 }
