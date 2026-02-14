@@ -7,7 +7,7 @@ const POLISH_TIMEOUT_MS = 30000;
 
 function getBackendBaseUrl(): string {
   const domain = process.env.EXPO_PUBLIC_DOMAIN || "";
-  return `https://${domain}`;
+  return `https://${domain}:5000`;
 }
 
 function getApiEndpoint(provider: Provider): string {
