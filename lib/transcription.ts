@@ -5,87 +5,91 @@ import { getApiUrl } from "./query-client";
 const TRANSCRIBE_TIMEOUT_MS = 60000;
 const POLISH_TIMEOUT_MS = 30000;
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${ms / 1000} seconds. Check your internet connection and try again.`));
-    }, ms);
-    promise
-      .then((val) => { clearTimeout(timer); resolve(val); })
-      .catch((err) => { clearTimeout(timer); reject(err); });
-  });
-}
-
 export async function transcribeAudio(
   audioUri: string,
   apiKey: string,
   provider: Provider
 ): Promise<string> {
   if (Platform.OS === "web") {
-    return withTimeout(
-      transcribeWeb(audioUri, apiKey, provider),
-      TRANSCRIBE_TIMEOUT_MS,
-      "Transcription"
-    );
+    return transcribeWeb(audioUri, apiKey, provider);
   }
-  return withTimeout(
-    transcribeNative(audioUri, apiKey, provider),
-    TRANSCRIBE_TIMEOUT_MS,
-    "Transcription"
-  );
+  return transcribeNative(audioUri, apiKey, provider);
 }
 
-async function transcribeNative(
+function transcribeNative(
   audioUri: string,
   apiKey: string,
   provider: Provider
 ): Promise<string> {
-  const formData = new FormData();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("Transcription timed out. Check your internet connection and try again."));
+    }, TRANSCRIBE_TIMEOUT_MS);
 
-  const fileExtension = audioUri.split(".").pop() || "m4a";
-  const mimeType = fileExtension === "webm" ? "audio/webm"
-    : fileExtension === "mp4" ? "audio/mp4"
-    : fileExtension === "caf" ? "audio/x-caf"
-    : "audio/m4a";
-
-  formData.append("file", {
-    uri: audioUri,
-    type: mimeType,
-    name: `recording.${fileExtension}`,
-  } as any);
-
-  const model = provider === "groq" ? "whisper-large-v3-turbo" : "whisper-1";
-  formData.append("model", model);
-  formData.append("response_format", "text");
-
-  const baseUrl = provider === "groq"
-    ? "https://api.groq.com/openai/v1"
-    : "https://api.openai.com/v1";
-
-  const response = await globalThis.fetch(`${baseUrl}/audio/transcriptions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
-  });
-
-  if (!response.ok) {
-    let errorDetail = "";
     try {
-      const errBody = await response.text();
-      const parsed = JSON.parse(errBody);
-      errorDetail = parsed?.error?.message || errBody;
-    } catch {
-      errorDetail = `HTTP ${response.status}`;
-    }
-    throw new Error(parseErrorMessage(response.status, errorDetail));
-  }
+      const formData = new FormData();
 
-  const text = await response.text();
-  const trimmed = text.trim();
-  if (!trimmed) {
-    throw new Error("No speech detected. Please speak clearly and try again.");
-  }
-  return trimmed;
+      const fileExtension = audioUri.split(".").pop()?.split("?")[0] || "m4a";
+      const mimeType = fileExtension === "webm" ? "audio/webm"
+        : fileExtension === "mp4" ? "audio/mp4"
+        : fileExtension === "caf" ? "audio/x-caf"
+        : "audio/m4a";
+
+      formData.append("file", {
+        uri: audioUri,
+        type: mimeType,
+        name: `recording.${fileExtension}`,
+      } as any);
+
+      const model = provider === "groq" ? "whisper-large-v3-turbo" : "whisper-1";
+      formData.append("model", model);
+      formData.append("response_format", "text");
+
+      const baseUrl = provider === "groq"
+        ? "https://api.groq.com/openai/v1"
+        : "https://api.openai.com/v1";
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${baseUrl}/audio/transcriptions`);
+      xhr.setRequestHeader("Authorization", `Bearer ${apiKey}`);
+
+      xhr.onload = () => {
+        clearTimeout(timeout);
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const text = (xhr.responseText || "").trim();
+          if (!text) {
+            reject(new Error("No speech detected. Please speak clearly and try again."));
+          } else {
+            resolve(text);
+          }
+        } else {
+          let detail = "";
+          try {
+            const parsed = JSON.parse(xhr.responseText);
+            detail = parsed?.error?.message || xhr.responseText;
+          } catch {
+            detail = xhr.responseText || `HTTP ${xhr.status}`;
+          }
+          reject(new Error(parseErrorMessage(xhr.status, detail)));
+        }
+      };
+
+      xhr.onerror = () => {
+        clearTimeout(timeout);
+        reject(new Error("Network error while transcribing. Please check your internet connection."));
+      };
+
+      xhr.ontimeout = () => {
+        clearTimeout(timeout);
+        reject(new Error("Transcription request timed out. Please try again."));
+      };
+
+      xhr.send(formData);
+    } catch (err: any) {
+      clearTimeout(timeout);
+      reject(new Error(`Failed to prepare audio: ${err.message}`));
+    }
+  });
 }
 
 async function transcribeWeb(
@@ -140,37 +144,53 @@ export async function polishTranscript(
   provider: Provider
 ): Promise<string> {
   if (Platform.OS === "web") {
-    return withTimeout(
-      polishWeb(rawText, apiKey, provider),
-      POLISH_TIMEOUT_MS,
-      "Text polishing"
-    );
+    return polishWeb(rawText, apiKey, provider);
   }
-  return withTimeout(
-    polishNative(rawText, apiKey, provider),
-    POLISH_TIMEOUT_MS,
-    "Text polishing"
-  );
+  return polishNative(rawText, apiKey, provider);
 }
 
-async function polishNative(
+function polishNative(
   rawText: string,
   apiKey: string,
   provider: Provider
 ): Promise<string> {
-  const baseUrl = provider === "groq"
-    ? "https://api.groq.com/openai/v1"
-    : "https://api.openai.com/v1";
-  const model = provider === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      resolve(rawText);
+    }, POLISH_TIMEOUT_MS);
 
-  try {
-    const response = await globalThis.fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    try {
+      const baseUrl = provider === "groq"
+        ? "https://api.groq.com/openai/v1"
+        : "https://api.openai.com/v1";
+      const model = provider === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${baseUrl}/chat/completions`);
+      xhr.setRequestHeader("Authorization", `Bearer ${apiKey}`);
+      xhr.setRequestHeader("Content-Type", "application/json");
+
+      xhr.onload = () => {
+        clearTimeout(timeout);
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const data = JSON.parse(xhr.responseText);
+            const polished = data.choices?.[0]?.message?.content?.trim();
+            resolve(polished || rawText);
+          } catch {
+            resolve(rawText);
+          }
+        } else {
+          resolve(rawText);
+        }
+      };
+
+      xhr.onerror = () => {
+        clearTimeout(timeout);
+        resolve(rawText);
+      };
+
+      xhr.send(JSON.stringify({
         model,
         messages: [
           {
@@ -182,18 +202,12 @@ async function polishNative(
         ],
         temperature: 0.1,
         max_tokens: 2048,
-      }),
-    });
-
-    if (!response.ok) {
-      return rawText;
+      }));
+    } catch {
+      clearTimeout(timeout);
+      resolve(rawText);
     }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || rawText;
-  } catch {
-    return rawText;
-  }
+  });
 }
 
 async function polishWeb(

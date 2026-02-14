@@ -187,7 +187,12 @@ export default function RecordScreen() {
       setIsProcessing(true);
       setProcessingStep("Transcribing audio...");
 
-      const raw = await transcribeAudio(uri, keyData.key, keyData.provider);
+      let raw: string;
+      try {
+        raw = await transcribeAudio(uri, keyData.key, keyData.provider);
+      } catch (transcribeErr: any) {
+        throw new Error(`[Transcribe] ${transcribeErr.message || "Unknown error"}`);
+      }
       setRawText(raw);
 
       setProcessingStep("Polishing text...");
