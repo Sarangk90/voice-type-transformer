@@ -1,4 +1,5 @@
 import { Platform } from "react-native";
+import { fetch as expoFetch } from "expo/fetch";
 import { Provider } from "./api-keys";
 
 const TRANSCRIBE_TIMEOUT_MS = 60000;
@@ -53,7 +54,7 @@ async function transcribeNative(
   const timeout = setTimeout(() => controller.abort(), TRANSCRIBE_TIMEOUT_MS);
 
   try {
-    const response = await fetch(fetchUrl, {
+    const response = await expoFetch(fetchUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -114,7 +115,7 @@ async function transcribeWeb(
 
   const baseUrl = getBackendBaseUrl();
 
-  const response = await fetch(`${baseUrl}/api/transcribe`, {
+  const response = await expoFetch(`${baseUrl}/api/transcribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ apiKey, provider, audioBase64: base64, mimeType }),
@@ -155,7 +156,7 @@ async function polishNative(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), POLISH_TIMEOUT_MS);
 
-    const response = await fetch(`${baseUrl}/api/polish`, {
+    const response = await expoFetch(`${baseUrl}/api/polish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ apiKey, provider, text: rawText }),
@@ -182,7 +183,7 @@ async function polishWeb(
 ): Promise<string> {
   try {
     const baseUrl = getBackendBaseUrl();
-    const response = await fetch(`${baseUrl}/api/polish`, {
+    const response = await expoFetch(`${baseUrl}/api/polish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ apiKey, provider, text: rawText }),
