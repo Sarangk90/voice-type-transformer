@@ -1,6 +1,4 @@
 import { Platform } from "react-native";
-import { File } from "expo-file-system";
-import { fetch as expoFetch } from "expo/fetch";
 import { Provider } from "./api-keys";
 import { getApiUrl } from "./query-client";
 
@@ -25,7 +23,7 @@ export async function transcribeAudio(
 ): Promise<string> {
   if (Platform.OS === "web") {
     return withTimeout(
-      transcribeViaProxy(audioUri, apiKey, provider),
+      transcribeWeb(audioUri, apiKey, provider),
       TRANSCRIBE_TIMEOUT_MS,
       "Transcription"
     );
@@ -42,9 +40,19 @@ async function transcribeNative(
   apiKey: string,
   provider: Provider
 ): Promise<string> {
-  const file = new File(audioUri);
   const formData = new FormData();
-  formData.append("file", file as any);
+
+  const fileExtension = audioUri.split(".").pop() || "m4a";
+  const mimeType = fileExtension === "webm" ? "audio/webm"
+    : fileExtension === "mp4" ? "audio/mp4"
+    : fileExtension === "caf" ? "audio/x-caf"
+    : "audio/m4a";
+
+  formData.append("file", {
+    uri: audioUri,
+    type: mimeType,
+    name: `recording.${fileExtension}`,
+  } as any);
 
   const model = provider === "groq" ? "whisper-large-v3-turbo" : "whisper-1";
   formData.append("model", model);
@@ -54,15 +62,22 @@ async function transcribeNative(
     ? "https://api.groq.com/openai/v1"
     : "https://api.openai.com/v1";
 
-  const response = await expoFetch(`${baseUrl}/audio/transcriptions`, {
+  const response = await globalThis.fetch(`${baseUrl}/audio/transcriptions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: formData,
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(parseErrorMessage(response.status, errorText));
+    let errorDetail = "";
+    try {
+      const errBody = await response.text();
+      const parsed = JSON.parse(errBody);
+      errorDetail = parsed?.error?.message || errBody;
+    } catch {
+      errorDetail = `HTTP ${response.status}`;
+    }
+    throw new Error(parseErrorMessage(response.status, errorDetail));
   }
 
   const text = await response.text();
@@ -73,7 +88,7 @@ async function transcribeNative(
   return trimmed;
 }
 
-async function transcribeViaProxy(
+async function transcribeWeb(
   audioUri: string,
   apiKey: string,
   provider: Provider
@@ -88,12 +103,12 @@ async function transcribeViaProxy(
       const dataUrl = reader.result as string;
       const b64 = dataUrl.split(",")[1];
       if (!b64) {
-        reject(new Error("Failed to convert audio recording. Please try again."));
+        reject(new Error("Failed to convert audio. Please try again."));
         return;
       }
       resolve(b64);
     };
-    reader.onerror = () => reject(new Error("Failed to read audio recording. Please try again."));
+    reader.onerror = () => reject(new Error("Failed to read audio. Please try again."));
     reader.readAsDataURL(blob);
   });
 
@@ -126,7 +141,7 @@ export async function polishTranscript(
 ): Promise<string> {
   if (Platform.OS === "web") {
     return withTimeout(
-      polishViaProxy(rawText, apiKey, provider),
+      polishWeb(rawText, apiKey, provider),
       POLISH_TIMEOUT_MS,
       "Text polishing"
     );
@@ -149,7 +164,7 @@ async function polishNative(
   const model = provider === "groq" ? "llama-3.3-70b-versatile" : "gpt-4o-mini";
 
   try {
-    const response = await expoFetch(`${baseUrl}/chat/completions`, {
+    const response = await globalThis.fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -181,7 +196,7 @@ async function polishNative(
   }
 }
 
-async function polishViaProxy(
+async function polishWeb(
   rawText: string,
   apiKey: string,
   provider: Provider
