@@ -25,7 +25,7 @@ function RootLayoutNav() {
         options={{ presentation: "modal", animation: "slide_from_bottom" }}
       />
       <Stack.Screen
-        name="history"
+        name="history/index"
         options={{ animation: "slide_from_right" }}
       />
     </Stack>

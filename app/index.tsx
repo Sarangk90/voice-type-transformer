@@ -275,8 +275,7 @@ export default function RecordScreen() {
   return (
     <View style={[styles.container, { paddingTop: insets.top + webTopInset }]}>
       <Animated.View
-        style={[StyleSheet.absoluteFill, styles.recordingBg, bgStyle]}
-        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, styles.recordingBg, bgStyle, { pointerEvents: "none" }]}
       />
 
       <View style={styles.header}>
