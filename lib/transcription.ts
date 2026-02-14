@@ -1,10 +1,14 @@
 import { Platform } from "react-native";
-import * as FileSystem from "expo-file-system/legacy";
 import { Provider } from "./api-keys";
-import { getApiUrl } from "./query-client";
 
 const TRANSCRIBE_TIMEOUT_MS = 60000;
 const POLISH_TIMEOUT_MS = 30000;
+
+function getBackendBaseUrl(): string {
+  const domain = process.env.EXPO_PUBLIC_DOMAIN || "";
+  const hostWithoutPort = domain.replace(/:\d+$/, "");
+  return `https://${hostWithoutPort}`;
+}
 
 export async function transcribeAudio(
   audioUri: string,
@@ -22,9 +26,15 @@ async function transcribeNative(
   apiKey: string,
   provider: Provider
 ): Promise<string> {
-  const base64 = await FileSystem.readAsStringAsync(audioUri, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+  let base64: string;
+  try {
+    const LegacyFS = require("expo-file-system/legacy");
+    base64 = await LegacyFS.readAsStringAsync(audioUri, {
+      encoding: LegacyFS.EncodingType.Base64,
+    });
+  } catch (fsErr: any) {
+    throw new Error(`Could not read audio file: ${fsErr.message}`);
+  }
 
   if (!base64 || base64.length < 100) {
     throw new Error("Recording was too short or empty. Please try again.");
@@ -36,13 +46,14 @@ async function transcribeNative(
     : fileExtension === "caf" ? "audio/x-caf"
     : "audio/m4a";
 
-  const apiUrl = getApiUrl();
+  const baseUrl = getBackendBaseUrl();
+  const fetchUrl = `${baseUrl}/api/transcribe`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TRANSCRIBE_TIMEOUT_MS);
 
   try {
-    const response = await fetch(new URL("/api/transcribe", apiUrl).toString(), {
+    const response = await fetch(fetchUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -101,9 +112,9 @@ async function transcribeWeb(
     reader.readAsDataURL(blob);
   });
 
-  const apiUrl = getApiUrl();
+  const baseUrl = getBackendBaseUrl();
 
-  const response = await fetch(new URL("/api/transcribe", apiUrl).toString(), {
+  const response = await fetch(`${baseUrl}/api/transcribe`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ apiKey, provider, audioBase64: base64, mimeType }),
@@ -140,11 +151,11 @@ async function polishNative(
   provider: Provider
 ): Promise<string> {
   try {
-    const apiUrl = getApiUrl();
+    const baseUrl = getBackendBaseUrl();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), POLISH_TIMEOUT_MS);
 
-    const response = await fetch(new URL("/api/polish", apiUrl).toString(), {
+    const response = await fetch(`${baseUrl}/api/polish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ apiKey, provider, text: rawText }),
@@ -170,8 +181,8 @@ async function polishWeb(
   provider: Provider
 ): Promise<string> {
   try {
-    const apiUrl = getApiUrl();
-    const response = await fetch(new URL("/api/polish", apiUrl).toString(), {
+    const baseUrl = getBackendBaseUrl();
+    const response = await fetch(`${baseUrl}/api/polish`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ apiKey, provider, text: rawText }),
