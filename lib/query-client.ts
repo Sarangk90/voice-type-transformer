@@ -12,7 +12,8 @@ export function getApiUrl(): string {
     throw new Error("EXPO_PUBLIC_DOMAIN is not set");
   }
 
-  let url = new URL(`https://${host}`);
+  const hostWithoutPort = host.replace(/:\d+$/, "");
+  let url = new URL(`https://${hostWithoutPort}`);
 
   return url.href;
 }
